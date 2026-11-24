@@ -1,0 +1,167 @@
+{% extends "web/base.html" %}{% block title %}Main Gate Live{% endblock %}
+{% block body %}
+<div class="top">
+ <div><h1 class="row" style="gap:10px"><span class="live-dot"></span><span id="gateTitle">Main Gate</span> · Live</h1>
+ <div class="sub"><span id="clock"></span> · Number-plate recognition is advisory. Guard confirms every decision.</div></div>
+ <div class="spacer"></div>
+ <select id="gate" style="width:auto"><option>Main Gate</option><option>Gate 2 (Hostel side)</option><option>Gate 3 (Back gate)</option></select>
+ <div class="tabs" id="dir"><button data-v="in" class="on">Entry</button><button data-v="out">Exit</button></div>
+</div>
+
+<div class="grid g4" id="counters" style="margin-bottom:16px"></div>
+
+<div class="grid" style="grid-template-columns:minmax(0,5fr) minmax(0,6fr)">
+ <div class="grid" style="align-content:start">
+  <div class="card"><div class="hd"><h3>Gate camera</h3><div class="spacer"></div>
+    <select id="camSel" style="width:auto;max-width:210px;padding:6px 10px;font-size:12px"></select></div>
+   <div class="bd">
+    <div class="video-box" id="vbox"><video id="video" playsinline muted></video><img id="still" style="display:none">
+     <div class="ov"><span id="camState">Camera off</span><span id="autoState" style="display:none"><span class="live-dot"></span>Auto-scan</span></div>
+     <div id="camEmpty" style="position:absolute;inset:0;display:grid;place-items:center;color:#bbb;text-align:center;padding:20px">
+      <div><div style="font-size:15px;font-weight:600;color:#ddd">Use this computer's webcam / USB camera</div>
+      <div class="small" style="margin-top:6px">or upload a photo, or connect ESP32-CAM / phone camera nodes (Cameras page)</div>
+      <button class="btn pri" style="margin-top:14px" onclick="startCam()">Start camera</button></div></div>
+    </div>
+    <div class="row" style="margin-top:12px;flex-wrap:wrap">
+     <button class="btn pri" id="snapBtn" onclick="snap()" disabled>Capture &amp; check</button>
+     <button class="btn" id="autoBtn" onclick="toggleAuto()" disabled>Auto-scan: off</button>
+     <label class="btn" style="margin:0;color:var(--ink);font-size:13px">Upload photo<input type="file" accept="image/*" id="file" style="display:none"></label>
+     <div class="spacer"></div>
+     <button class="btn ghost sm" onclick="stopCam()">Stop</button>
+    </div>
+    <form class="row" style="margin-top:12px" onsubmit="manual(event)">
+     <input id="manualPlate" placeholder="Manual entry, e.g. PB11AB1234" style="text-transform:uppercase">
+     <button class="btn">Check plate</button></form>
+   </div></div>
+
+  <div class="card"><div class="hd"><h3>Latest decision</h3><div class="spacer"></div><span class="muted small" id="lastAt"></span></div>
+   <div class="bd" id="latest"><div class="empty">Waiting for a vehicle…</div></div></div>
+
+  <div class="card"><div class="hd"><h3>Verify visitor / vendor pass</h3></div><div class="bd">
+   <form class="row" onsubmit="verifyPass(event)"><input id="passTok" placeholder="Pass code TSP-XXXXXX or scanned QR text"><button class="btn">Verify</button></form>
+   <div class="muted small" style="margin-top:8px">Guards can scan the green QR with the mobile app (Verify QR tab). Here you can type the pass code.</div>
+   <div id="passRes" style="margin-top:10px"></div></div></div>
+ </div>
+
+ <div class="card" style="display:flex;flex-direction:column;min-height:640px">
+  <div class="hd" style="flex-wrap:wrap"><h3 style="white-space:nowrap">Live feed</h3><div class="spacer"></div>
+   <div class="row" style="gap:6px;flex-wrap:wrap" id="filters">
+    <span class="chip on" data-f="">All</span><span class="chip" data-f="needs_review">Needs review</span>
+    <span class="chip" data-f="unauthorized">Unauthorized</span><span class="chip" data-f="expired">Expired</span><span class="chip" data-f="authorized">Authorized</span></div>
+   <button class="btn sm ghost" id="sound" onclick="toggleSound()">🔔 Sound on</button></div>
+  <div id="feed" style="overflow:auto;flex:1"></div>
+ </div>
+</div>
+{% endblock %}
+{% block js %}<script>
+let DIR="in", GATE=ME.gate||"Main Gate", FILTER="", SOUND=true, events=new Map(), lastSync=null, auto=null, busy=false;
+const $=id=>document.getElementById(id);
+const cam=TSP.Cam($("video"));
+$("gate").value=GATE; if(!$("gate").value){ $("gate").insertAdjacentHTML("afterbegin",`<option>${GATE}</option>`); $("gate").value=GATE;}
+$("gateTitle").textContent=GATE;
+$("gate").onchange=e=>{GATE=e.target.value;$("gateTitle").textContent=GATE;events.clear();lastSync=null;render();poll();};
+document.querySelectorAll("#dir button").forEach(b=>b.onclick=()=>{document.querySelectorAll("#dir button").forEach(x=>x.classList.remove("on"));b.classList.add("on");DIR=b.dataset.v;});
+document.querySelectorAll("#filters .chip").forEach(c=>c.onclick=()=>{document.querySelectorAll("#filters .chip").forEach(x=>x.classList.remove("on"));c.classList.add("on");FILTER=c.dataset.f;render();});
+setInterval(()=>$("clock").textContent=new Date().toLocaleString([], {weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit",second:"2-digit"}),1000);
+function toggleSound(){SOUND=!SOUND;$("sound").textContent=SOUND?"🔔 Sound on":"🔕 Muted";}
+
+async function listCams(){ try{ const d=await cam.devices(); $("camSel").innerHTML=d.map((x,i)=>`<option value="${x.deviceId}">${TSP.esc(x.label||"Camera "+(i+1))}</option>`).join("")||"<option>No camera found</option>"; }catch(e){} }
+$("camSel").onchange=()=>{ if(cam.on) startCam(); };
+async function startCam(){
+  try{ await cam.start($("camSel").value||undefined); $("camEmpty").style.display="none"; $("video").style.display="block"; $("still").style.display="none";
+    $("camState").innerHTML='<span class="live-dot"></span>Live'; $("snapBtn").disabled=false; $("autoBtn").disabled=false; listCams(); }
+  catch(e){ TSP.toast("Camera error: "+e.message+" (open the portal via http://localhost:8000 on this PC to allow camera access)","err"); }
+}
+function stopCam(){ cam.stop(); if(auto){clearInterval(auto);auto=null;} $("autoBtn").textContent="Auto-scan: off"; $("autoState").style.display="none";
+  $("camState").textContent="Camera off"; $("snapBtn").disabled=true; $("autoBtn").disabled=true; $("camEmpty").style.display="grid"; }
+function toggleAuto(){
+  if(auto){clearInterval(auto);auto=null;$("autoBtn").textContent="Auto-scan: off";$("autoState").style.display="none";return;}
+  auto=setInterval(()=>send(null,true),2500); $("autoBtn").textContent="Auto-scan: on (2.5s)"; $("autoState").style.display="flex";
+}
+async function snap(){ send(null,false); }
+$("file").onchange=async e=>{ const f=e.target.files[0]; if(!f) return; $("still").src=URL.createObjectURL(f); $("still").style.display="block"; $("video").style.display="none"; $("camEmpty").style.display="none"; await send(f,false); e.target.value=""; };
+async function send(blob, isAuto){
+  if(busy) return; busy=true;
+  try{
+    blob = blob || await cam.snap();
+    const r=await TSP.upload("gate/scan/", blob, {gate:GATE,direction:DIR,source:"web",auto:isAuto?"1":"0"});
+    if(r.event){ upsert(r.event,true); showLatest(r.event); }
+    else if(!isAuto) TSP.toast("No number plate found. Move closer / improve lighting, or type it manually.","err");
+  }catch(e){ if(!isAuto) TSP.toast(e.message,"err"); } finally{ busy=false; }
+}
+async function manual(e){ e.preventDefault(); const p=$("manualPlate").value.trim(); if(!p) return;
+  try{ const r=await TSP.post("gate/scan/",{plate:p,gate:GATE,direction:DIR}); upsert(r.event,true); showLatest(r.event); $("manualPlate").value=""; }catch(err){TSP.toast(err.message,"err");} }
+
+function upsert(e, fresh){ const was=events.get(e.id); events.set(e.id,{...e,_fresh:fresh&&(!was||was.updated_at!==e.updated_at)}); }
+function showLatest(e){
+  const d=e.effective, v=e.vehicle_info;
+  $("lastAt").textContent=TSP.fmtTime(e.updated_at);
+  $("latest").innerHTML=`<div class="decision ${d}">
+   <div class="row" style="align-items:flex-start;gap:16px;flex-wrap:wrap">
+    <div>${TSP.plate(e.plate,true)}<div class="muted small" style="margin-top:8px">OCR ${Math.round(e.confidence*100)}% ${e.valid_format?"· valid format":"· unusual format"} · ${e.direction==="in"?"Entry":"Exit"} · ${e.source_label}</div></div>
+    <div class="spacer"></div><div class="right"><div class="big" style="color:var(--${{authorized:"ok",unauthorized:"bad",expired:"warn",needs_review:"rev"}[d]})">${TSP.LABEL[d]}</div>
+    ${e.final_decision?`<div class="small muted">Confirmed by ${TSP.esc(e.reviewed_by_name||"guard")}</div>`:""}</div></div>
+   <div style="margin-top:12px;font-weight:600">${TSP.esc(e.reason)}</div>
+   ${v?`<div class="small" style="margin-top:6px">Owner: <b>${TSP.esc(v.owner)}</b> · ${TSP.esc(v.category)} · ${TSP.esc([v.colour,v.make,v.model].filter(Boolean).join(" "))}</div>`:""}
+   ${e.booking_code?`<div class="small" style="margin-top:6px">Pass <b>${e.booking_code}</b> · ${TSP.esc(e.booking_holder)}</div>`:""}
+   ${e.image_url?`<img src="${e.image_url}" style="width:100%;border-radius:10px;margin-top:12px;max-height:220px;object-fit:contain;background:#111">`:""}
+   <div class="row" style="margin-top:14px;flex-wrap:wrap">
+    <button class="btn ok" onclick="review(${e.id},'authorized')">✓ Allow entry</button>
+    <button class="btn bad" onclick="review(${e.id},'unauthorized')">✕ Deny</button>
+    <button class="btn" onclick="openReview(${e.id})">Correct plate / note</button>
+    ${e.plate?`<button class="btn ghost" onclick="flagIt('${e.plate}')">Flag</button>`:""}
+   </div></div>`;
+  if(SOUND && (d==="unauthorized"||d==="needs_review")) TSP.beep(d==="unauthorized"?440:660, 220);
+  if(SOUND && d==="authorized") TSP.beep(1200,90);
+}
+async function review(id, dec, plate="", note=""){
+  try{ const e=await TSP.post(`gate/events/${id}/review/`,{final_decision:dec,plate,note}); upsert(e,false); showLatest(e); render(); TSP.toast(`Recorded: ${TSP.LABEL[e.effective]}`,"ok"); TSP.closeModal(); }
+  catch(err){TSP.toast(err.message,"err");}
+}
+function openReview(id){
+  const e=events.get(id);
+  TSP.modal(`<div class="hd"><h3>Review gate read</h3><div class="spacer"></div><button class="btn ghost" onclick="TSP.closeModal()">✕</button></div><div class="bd">
+   ${e.image_url?`<img src="${e.image_url}" style="width:100%;border-radius:12px;background:#111;max-height:340px;object-fit:contain">`:""}
+   <div class="row" style="margin:14px 0">${TSP.plate(e.plate)} ${TSP.badge(e.effective)} <span class="muted small">raw OCR “${TSP.esc(e.plate_raw)}” · ${Math.round(e.confidence*100)}%</span></div>
+   <div class="muted small" style="margin-bottom:12px">${TSP.esc(e.reason)}</div>
+   ${e.candidates?`<div class="small" style="margin-bottom:10px">Possible match: ${e.candidates.map(c=>`<a href="#" onclick="document.getElementById('rp').value='${c.plate}';return false">${c.pretty}</a>`).join(", ")}</div>`:""}
+   <div class="grid g2"><div class="field"><label>Corrected plate (optional)</label><input id="rp" value="${e.plate}" style="text-transform:uppercase"></div>
+   <div class="field"><label>Note</label><input id="rn" placeholder="e.g. verified RC / called host"></div></div>
+   <div class="row"><button class="btn" onclick="review(${id},'',document.getElementById('rp').value,document.getElementById('rn').value)">Re-check corrected plate</button><div class="spacer"></div>
+   <button class="btn ok" onclick="review(${id},'authorized',document.getElementById('rp').value,document.getElementById('rn').value)">Allow</button>
+   <button class="btn bad" onclick="review(${id},'unauthorized',document.getElementById('rp').value,document.getElementById('rn').value)">Deny</button></div></div>`);
+}
+function flagIt(p){ location.href="/portal/flags/?plate="+encodeURIComponent(p); }
+
+function render(){
+  const list=[...events.values()].filter(e=>e.gate===GATE).sort((a,b)=>new Date(b.updated_at)-new Date(a.updated_at)).filter(e=>!FILTER||e.effective===FILTER).slice(0,80);
+  $("feed").innerHTML=list.map(e=>`<div class="feed-item ${e.effective} ${e._fresh?"fresh":""}" onclick="showLatest(events.get(${e.id}));openReview(${e.id})">
+    ${e.image_url?`<img class="thumb" src="${e.image_url}">`:`<div class="thumb" style="display:grid;place-items:center;color:#aaa;font-size:11px">${e.source==="qr"?"QR pass":e.source==="manual"?"typed":"no image"}</div>`}
+    <div style="min-width:0;flex:1"><div class="row">${TSP.plate(e.plate)}${TSP.badge(e.effective)}${e.final_decision?'<span class="small muted">✓ reviewed</span>':""}${e.hits>1?`<span class="small muted">×${e.hits}</span>`:""}</div>
+    <div class="small muted" style="margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${TSP.esc(e.reason)}</div></div>
+    <div class="right small"><div class="b">${TSP.fmtTime(e.updated_at)}</div><div class="muted">${e.direction==="in"?"IN":"OUT"} · ${TSP.esc(e.camera_name||e.source_label)}</div></div></div>`).join("") || `<div class="empty">No events${FILTER?" for this filter":""} yet.</div>`;
+  events.forEach(e=>e._fresh=false);
+  const all=[...events.values()].filter(e=>e.gate===GATE && new Date(e.created_at).toDateString()===new Date().toDateString());
+  const c=k=>all.filter(e=>e.effective===k).length;
+  $("counters").innerHTML=[["Vehicles today",all.filter(e=>e.direction==="in").length,"entries at this gate"],["Authorized",c("authorized"),""],["Needs review",c("needs_review"),"tap an item to review"],["Unauthorized / expired",c("unauthorized")+c("expired"),""]]
+   .map(([l,v,s],i)=>`<div class="card kpi"><div class="l">${l}</div><div class="v" style="color:${["var(--ink)","var(--ok)","var(--rev)","var(--bad)"][i]}">${v}</div><div class="s">${s}</div></div>`).join("");
+}
+async function poll(){
+  try{
+    const q=lastSync?`&since=${encodeURIComponent(lastSync)}`:"";
+    const list=await TSP.api(`gate/events/?limit=150&gate=${encodeURIComponent(GATE)}${q}`);
+    let newest=null;
+    list.forEach(e=>{ const isNew=lastSync&&!events.has(e.id); upsert(e,!!lastSync); if(isNew&&e.source!=="web"&&e.source!=="manual") newest=e; if(!lastSync||e.updated_at>lastSync) {} });
+    if(list.length) lastSync=list.reduce((m,e)=>e.updated_at>m?e.updated_at:m, lastSync||list[0].updated_at);
+    if(newest) showLatest(newest);
+    render();
+  }catch(e){}
+}
+async function verifyPass(e){ e.preventDefault();
+  try{ const r=await TSP.post("passes/verify/",{token:$("passTok").value.trim(),gate:GATE}); const b=r.booking;
+    $("passRes").innerHTML=`<div class="decision ${r.valid?"authorized":"unauthorized"}" style="padding:14px"><div class="b" style="font-size:16px">${r.valid?"✓ VALID PASS":"✕ "+TSP.esc(r.message)}</div>
+     ${b?`<div class="small" style="margin-top:6px">${TSP.plate(b.plate)} · ${TSP.esc(b.holder)} ${b.organisation?"("+TSP.esc(b.organisation)+")":""}<br>${TSP.esc(b.kind_label)} · ${TSP.esc(b.lot)}${b.slot?" · slot "+b.slot:""}<br>${TSP.fmtDT(b.start)} → ${TSP.fmtDT(b.end)}</div>`:""}</div>`;
+    poll();
+  }catch(err){TSP.toast(err.message,"err");} }
+listCams(); poll(); setInterval(poll,2000);
+</script>{% endblock %}

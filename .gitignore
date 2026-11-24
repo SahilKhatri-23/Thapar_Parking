@@ -1,0 +1,13 @@
+.venv/
+*/.venv/
+__pycache__/
+*/__pycache__/
+*.py[cod]
+*$py.class
+*.sqlite3
+media/
+staticfiles/
+.DS_Store
+__MACOSX/
+.vscode/
+.idea/

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Thapar Smart Parking backend - macOS / Linux start
+cd "$(dirname "$0")"
+if [ ! -d .venv ]; then
+  python3 -m venv .venv && . .venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt
+else
+  . .venv/bin/activate
+fi
+python start.py

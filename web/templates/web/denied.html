@@ -1,0 +1,2 @@
+{% load static %}<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="{% static 'web/portal.css' %}"></head>
+<body class="login-bg"><div class="login"><h2>Not allowed</h2><p class="muted">This page is for {% if request.user.is_guard %}admins only{% else %}admin and guard accounts{% endif %}. Students, faculty, visitors and vendors use the mobile app.</p><a class="btn pri" href="/portal/logout/">Sign in with another account</a></div></body></html>

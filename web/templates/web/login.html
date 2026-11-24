@@ -1,0 +1,11 @@
+{% load static %}<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in · Thapar Smart Parking</title><link rel="stylesheet" href="{% static 'web/portal.css' %}"></head>
+<body class="login-bg"><form class="login" method="post">{% csrf_token %}
+<div class="row" style="margin-bottom:22px"><div style="width:46px;height:46px;border-radius:13px;background:linear-gradient(135deg,#A3283A,#5C1520);display:grid;place-items:center;color:#fff;font-weight:800">TU</div>
+<div><h2 style="font-size:20px">Thapar Smart Parking</h2><div class="muted small">Security &amp; parking office portal</div></div></div>
+{% if error %}<div class="badge b-unauthorized" style="display:block;padding:10px 12px;border-radius:10px;margin-bottom:14px;white-space:normal">{{error}}</div>{% endif %}
+<div class="field"><label>Thapar email</label><input name="email" type="email" placeholder="you@thapar.edu" required autofocus></div>
+<div class="field"><label>Password</label><input name="password" type="password" required></div>
+<button class="btn pri lg" style="width:100%;margin-top:6px">Sign in</button>
+<p class="muted small" style="margin-top:18px;line-height:1.6">For admins and guards. Students, faculty, visitors and vendors use the mobile app.<br>Demo: <span class="code">admin@thapar.edu</span> / <span class="code">guard@thapar.edu</span> · <span class="code">Thapar@123</span></p>
+</form></body></html>

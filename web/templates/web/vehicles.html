@@ -1,0 +1,84 @@
+{% extends "web/base.html" %}{% block title %}Vehicle Registry{% endblock %}
+{% block body %}
+<div class="top"><div><h1>Vehicle registry</h1><div class="sub">Search, authorize, suspend or revoke access. Owner contact numbers are masked for guards; reveals are logged.</div></div><div class="spacer"></div>
+ {% if request.user.is_admin %}<button class="btn pri" onclick="addVehicle()">+ Register vehicle</button>{% endif %}</div>
+
+<div class="grid" style="grid-template-columns:minmax(0,2.2fr) minmax(0,1fr)">
+<div class="card">
+ <div class="hd" style="flex-wrap:wrap"><input id="q" placeholder="Search plate, owner, make…" style="max-width:280px">
+  <div class="tabs" id="st"><button data-s="" class="on">All</button><button data-s="pending">Pending</button><button data-s="active">Authorized</button><button data-s="suspended">Suspended</button><button data-s="revoked">Revoked</button></div>
+  <div class="spacer"></div><span class="muted small" id="count"></span></div>
+ <table><thead><tr><th>Plate</th><th>Owner / contact</th><th>Category</th><th>Vehicle</th><th>Status</th><th>Valid till</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+</div>
+<div class="grid" style="align-content:start">
+ <div class="card"><div class="hd"><h3>Whose car is this?</h3></div><div class="bd">
+  <form class="row" onsubmit="lookup(event)"><input id="lp" placeholder="Type plate" style="text-transform:uppercase"><button class="btn">Find</button></form>
+  <label class="btn" style="margin:10px 0 0;width:100%;color:var(--ink)">…or upload a photo of the plate<input type="file" accept="image/*" id="lf" style="display:none"></label>
+  <div id="lres" style="margin-top:12px"></div></div></div>
+</div></div>
+{% endblock %}
+{% block js %}<script>
+const $=id=>document.getElementById(id); let ST="", T=null, LOTS=[];
+document.querySelectorAll("#st button").forEach(b=>b.onclick=()=>{document.querySelectorAll("#st button").forEach(x=>x.classList.remove("on"));b.classList.add("on");ST=b.dataset.s;load();});
+$("q").oninput=()=>{clearTimeout(T);T=setTimeout(load,250);};
+async function load(){
+  const v=await TSP.api(`vehicles/?q=${encodeURIComponent($("q").value)}&status=${ST}`);
+  $("count").textContent=v.length+" vehicles";
+  $("rows").innerHTML=v.map(x=>`<tr><td>${TSP.plate(x.plate)}${x.open_flags?` <span class="badge b-open">flag</span>`:""}</td>
+   <td><b>${TSP.esc(x.owner_display)}</b><div class="small muted">${TSP.esc(x.owner_email||(x.owner?"app user":x.owner_phone?"no app account":""))}</div></td>
+   <td>${x.category_label}</td><td class="small">${TSP.esc([x.colour,x.make,x.model_name].filter(Boolean).join(" "))||"—"}<div class="muted">${x.type_label}${x.home_lot_name?" · "+TSP.esc(x.home_lot_name):""}</div></td>
+   <td>${TSP.badge(x.expired&&x.status==="active"?"expired":x.status, x.expired&&x.status==="active"?"Expired":x.status_label)}</td>
+   <td class="small">${x.valid_until||"—"}</td>
+   <td class="right">${ME.admin?actions(x):`<button class="btn sm" onclick="lookupPlate('${x.plate}')">View</button>`}</td></tr>`).join("")||`<tr><td colspan=7 class="empty">No vehicles found</td></tr>`;
+}
+function actions(x){ const b=[];
+  if(x.status!=="active"||x.expired) b.push(`<button class="btn sm ok" onclick="act(${x.id},'authorize','${x.plate}')">Authorize</button>`);
+  if(x.status==="active") b.push(`<button class="btn sm" onclick="act(${x.id},'suspend','${x.plate}')">Suspend</button>`);
+  if(x.status!=="revoked") b.push(`<button class="btn sm ghost" style="color:var(--bad)" onclick="act(${x.id},'revoke','${x.plate}')">Revoke</button>`);
+  b.push(`<button class="btn sm ghost" onclick="lookupPlate('${x.plate}')">⋯</button>`);
+  return `<div class="row" style="justify-content:flex-end;gap:6px">${b.join("")}</div>`; }
+async function act(id,action,plate){
+  let body={action};
+  if(action==="authorize"){ const d=prompt(`Authorize ${TSP.prettyPlate(plate)}. Valid until (YYYY-MM-DD), blank = no expiry:`, new Date(Date.now()+365*864e5).toISOString().slice(0,10)); if(d===null) return; if(d) body.valid_until=d; }
+  else { const r=prompt(`Reason to ${action} ${TSP.prettyPlate(plate)} (shown to owner, kept in audit log):`); if(r===null) return; body.reason=r; }
+  try{ await TSP.post(`vehicles/${id}/action/`,body); TSP.toast(`${TSP.prettyPlate(plate)}: ${action}d`,"ok"); load(); }catch(e){TSP.toast(e.message,"err");}
+}
+function card(r){
+  const v=r.vehicle;
+  return `${TSP.plate(r.plate,true)}<div style="margin:10px 0">${TSP.badge(r.decision.decision)} <span class="small">${TSP.esc(r.decision.reason)}</span></div>
+   ${v?`<div class="kv"><div>Owner</div><div><b>${TSP.esc(v.owner_name)}</b> ${v.department?"· "+TSP.esc(v.department):""}</div><div>Role</div><div>${TSP.esc(v.owner_role)}</div>
+   <div>Phone</div><div><span id="ph">${TSP.esc(v.phone||"—")}</span> ${v.phone_masked&&v.has_phone?`<button class="btn sm" onclick="reveal(${v.id})">Reveal &amp; call</button>`:""}</div>
+   <div>Vehicle</div><div>${TSP.esc([v.colour,v.make,v.model].filter(Boolean).join(" "))}</div><div>Home lot</div><div>${TSP.esc(v.home_lot||"—")}</div>
+   <div>Status</div><div>${TSP.esc(v.status_label)} ${v.valid_until?"till "+v.valid_until:""}</div><div>App account</div><div>${v.has_app_account?"Yes (can be alerted)":"No"}</div></div>
+   <div class="row" style="margin-top:12px"><a class="btn sm bad" href="/portal/flags/?plate=${r.plate}">Flag &amp; alert owner</a></div>`
+   :`<div class="muted">${r.match==="none"?"Not in registry.":"Near match only."}</div>`}
+   ${r.pass?`<div style="margin-top:12px" class="small">Pass <b>${r.pass.code}</b> · ${TSP.esc(r.pass.holder)} · ${TSP.badge(r.pass.status,r.pass.status_label)}</div>`:""}`;
+}
+async function lookupPlate(p){ $("lp").value=TSP.prettyPlate(p); lookup(); }
+async function lookup(e){ e&&e.preventDefault(); const p=$("lp").value; if(!p) return;
+  try{ $("lres").innerHTML=card(await TSP.api("vehicles/lookup/?plate="+encodeURIComponent(p))); }catch(err){TSP.toast(err.message,"err");} }
+async function reveal(id){ if(!confirm("Reveal the owner's phone number? This is recorded in the audit log.")) return;
+  const r=await TSP.post(`vehicles/${id}/reveal-contact/`,{reason:"portal lookup"}); $("ph").innerHTML=`<a href="tel:${r.phone}"><b>${TSP.esc(r.phone)}</b></a>`; }
+$("lf").onchange=async e=>{ const f=e.target.files[0]; if(!f) return; $("lres").innerHTML='<div class="muted">Reading plate…</div>';
+  try{ const r=await TSP.upload("vision/plate/",f); if(!r.reads.length){$("lres").innerHTML='<div class="muted">No plate found in the photo.</div>';return;}
+    $("lp").value=r.reads[0].pretty; lookup(); }catch(err){TSP.toast(err.message,"err");} e.target.value=""; };
+async function addVehicle(){
+  LOTS=LOTS.length?LOTS:await TSP.api("lots/");
+  TSP.modal(`<div class="hd"><h3>Register vehicle</h3><div class="spacer"></div><button class="btn ghost" onclick="TSP.closeModal()">✕</button></div>
+  <form class="bd" onsubmit="saveVehicle(event)"><div class="grid g2">
+   <div class="field"><label>Plate number *</label><input name="plate" required placeholder="PB11AB1234" style="text-transform:uppercase"></div>
+   <div class="field"><label>Category</label><select name="category"><option value="faculty">Faculty</option><option value="student">Student</option><option value="staff">Staff</option><option value="visitor">Visitor</option><option value="vendor">Vendor</option><option value="service">Campus service</option></select></div>
+   <div class="field"><label>Owner app account email (optional)</label><input name="owner_email" placeholder="name@thapar.edu"></div>
+   <div class="field"><label>Owner name (if no app account)</label><input name="owner_name"></div>
+   <div class="field"><label>Owner phone</label><input name="owner_phone" placeholder="+91…"></div>
+   <div class="field"><label>Type</label><select name="vehicle_type"><option value="car">Car</option><option value="suv">SUV</option><option value="two_wheeler">Two-wheeler</option><option value="ev">EV / e-cart</option><option value="goods">Goods vehicle</option><option value="other">Other</option></select></div>
+   <div class="field"><label>Make</label><input name="make"></div><div class="field"><label>Model</label><input name="model_name"></div>
+   <div class="field"><label>Colour</label><input name="colour"></div><div class="field"><label>Sticker no.</label><input name="sticker_no"></div>
+   <div class="field"><label>Regular parking lot</label><select name="home_lot"><option value="">—</option>${LOTS.map(l=>`<option value="${l.id}">${TSP.esc(l.name)}</option>`).join("")}</select></div>
+   <div class="field"><label>Valid until</label><input name="valid_until" type="date"></div></div>
+   <div class="row"><div class="spacer"></div><button class="btn pri">Register &amp; authorize</button></div></form>`);
+}
+async function saveVehicle(e){ e.preventDefault(); const f=Object.fromEntries([...new FormData(e.target)].filter(([k,v])=>v!==""));
+  try{ await TSP.post("vehicles/",f); TSP.closeModal(); TSP.toast("Vehicle registered","ok"); load(); }catch(err){TSP.toast(err.message,"err");} }
+load(); const qp=new URLSearchParams(location.search).get("plate"); if(qp) lookupPlate(qp);
+</script>{% endblock %}

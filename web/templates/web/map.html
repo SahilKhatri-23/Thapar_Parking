@@ -1,0 +1,22 @@
+{% extends "web/base.html" %}{% block title %}Campus Map{% endblock %}
+{% block head %}<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>#map{height:calc(100vh - 140px);border-radius:14px} .pin{background:#fff;border:2px solid #7A1F2B;border-radius:12px;padding:3px 8px;font-weight:800;font-size:12px;white-space:nowrap;box-shadow:0 3px 10px rgba(0,0,0,.25);transform:translate(-50%,-100%);display:inline-block}</style>{% endblock %}
+{% block body %}
+<div class="top"><div><h1>Campus parking map</h1><div class="sub">Live availability per lot. Satellite imagery: Esri; streets: OpenStreetMap (no API key).</div></div></div>
+<div class="card" style="padding:6px"><div id="map"></div></div>
+{% endblock %}
+{% block js %}<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
+const map=L.map("map").setView([30.3545,76.3675],16);
+const sat=L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",{maxZoom:19,attribution:"Imagery © Esri"});
+const osm=L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"});
+sat.addTo(map); L.control.layers({"Satellite":sat,"Streets":osm}).addTo(map);
+L.marker([30.35269,76.3735]).addTo(map).bindTooltip("Main Gate",{permanent:true,direction:"right"});
+let layer=L.layerGroup().addTo(map);
+async function load(){ const lots=await TSP.api("lots/"); layer.clearLayers(); const b=[];
+  lots.forEach(l=>{ const c=l.occupancy_pct>90?"#C3323C":l.occupancy_pct>70?"#E59A1A":"#12805C";
+   const ic=L.divIcon({className:"",html:`<div class="pin" style="border-color:${c}"><span style="color:${c}">${l.available}</span> · ${TSP.esc(l.name.replace(" Parking",""))}</div>`});
+   L.marker([l.latitude,l.longitude],{icon:ic}).addTo(layer).bindPopup(`<b>${TSP.esc(l.name)}</b><br>${l.available} free of ${l.total_slots}<br>${l.occupied} parked · ${l.reserved} reserved<br><a href="/portal/occupancy/?lot=${l.id}">Manage →</a>`);
+   L.circle([l.latitude,l.longitude],{radius:28,color:c,weight:2,fillOpacity:.25}).addTo(layer); b.push([l.latitude,l.longitude]); });
+  if(!window._fit){ map.fitBounds(b,{padding:[60,60]}); window._fit=1; } }
+load(); setInterval(load,15000);
+</script>{% endblock %}

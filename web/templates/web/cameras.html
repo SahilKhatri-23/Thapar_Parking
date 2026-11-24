@@ -1,0 +1,38 @@
+{% extends "web/base.html" %}{% block title %}Cameras{% endblock %}
+{% block body %}
+<div class="top"><div><h1>Camera nodes</h1><div class="sub">Any camera can feed the system: ESP32-CAM, IP/CCTV (RTSP), a USB webcam, or a phone running the app in Camera-node mode.</div></div><div class="spacer"></div><button class="btn pri" onclick="add()">+ Add camera</button></div>
+<div class="grid g3" id="cams"></div>
+<div class="card" style="margin-top:18px"><div class="hd"><h3>How to connect</h3></div><div class="bd grid g3">
+ <div><b>Phone as camera</b><p class="muted small">Sign in on the app as guard/admin → <i>More → Phone camera node</i>. Pick “Gate ANPR” or a parking lot. Keep the phone on a stand; it uploads a frame every few seconds.</p></div>
+ <div><b>ESP32-CAM</b><p class="muted small">Flash <span class="code">esp32cam/esp32cam_uploader.ino</span>, set Wi-Fi, server and the camera key below. It POSTs JPEG frames to:</p><pre class="code">POST {{server_url}}/api/cameras/ingest/
+X-Camera-Key: &lt;key&gt;
+Content-Type: image/jpeg</pre></div>
+ <div><b>IP camera / RTSP / USB webcam</b><p class="muted small">Run the worker on this computer:</p><pre class="code">python manage.py camera_worker --key &lt;key&gt; --source rtsp://user:pass@192.168.1.20:554/stream --interval 3
+# USB webcam: --source 0
+# Android "IP Webcam" app: --source http://PHONE_IP:8080/video</pre></div>
+</div></div>
+{% endblock %}
+{% block js %}<script>
+let LOTS=[];
+async function load(){ const [c,l]=await Promise.all([TSP.api("cameras/"),TSP.api("lots/")]); LOTS=l;
+ document.getElementById("cams").innerHTML=c.map(x=>`<div class="card">${x.last_image_url?`<img src="${x.last_image_url}?t=${Date.parse(x.last_seen_at)}" style="width:100%;height:170px;object-fit:cover;border-radius:14px 14px 0 0;display:block">`:`<div style="height:170px;background:#1F1416;border-radius:14px 14px 0 0;display:grid;place-items:center;color:#8d7d80" class="small">No frames received yet</div>`}
+  <div class="bd"><div class="row"><b>${TSP.esc(x.name)}</b><div class="spacer"></div>${x.online?'<span class="badge b-active"><span class="dot"></span>online</span>':'<span class="badge b-muted">offline</span>'}</div>
+  <div class="small muted" style="margin:4px 0 10px">${x.kind_label} · ${x.kind==="gate"?TSP.esc(x.gate)+" ("+(x.direction==="in"?"entry":"exit")+")":TSP.esc(x.lot_name||"no lot")} · last frame ${TSP.ago(x.last_seen_at)}</div>
+  <div class="small">Key: <span class="code">${x.key}</span></div>
+  ${x.last_result?`<div class="small muted" style="margin-top:6px">${x.kind==="gate"?(x.last_result.reads||[]).map(r=>r.pretty).join(", ")||"no plate in last frame":`${x.last_result.four_wheelers} vehicles detected`}</div>`:""}
+  <div class="row" style="margin-top:12px"><button class="btn sm" onclick="tog(${x.id},${!x.is_active})">${x.is_active?"Disable":"Enable"}</button><button class="btn sm ghost" style="color:var(--bad)" onclick="del(${x.id})">Delete</button></div></div></div>`).join("") || '<div class="empty">No cameras.</div>';
+}
+function add(){ TSP.modal(`<div class="hd"><h3>Add camera</h3><div class="spacer"></div><button class="btn ghost" onclick="TSP.closeModal()">✕</button></div><form class="bd" onsubmit="save(event)">
+ <div class="field"><label>Name</label><input name="name" required placeholder="Main Gate - Entry ANPR"></div>
+ <div class="grid g2"><div class="field"><label>Type</label><select name="kind"><option value="gate">Gate ANPR (plates)</option><option value="lot">Parking occupancy</option></select></div>
+ <div class="field"><label>Gate</label><input name="gate" value="Main Gate"></div>
+ <div class="field"><label>Direction</label><select name="direction"><option value="in">Entry</option><option value="out">Exit</option></select></div>
+ <div class="field"><label>Parking lot (occupancy cams)</label><select name="lot"><option value="">—</option>${LOTS.map(l=>`<option value="${l.id}">${TSP.esc(l.name)}</option>`).join("")}</select></div></div>
+ <div class="field"><label>Stream URL (optional, for camera_worker)</label><input name="stream_url" placeholder="rtsp://…"></div>
+ <button class="btn pri">Create</button></form>`); }
+async function save(e){ e.preventDefault(); const f=Object.fromEntries([...new FormData(e.target)].filter(([k,v])=>v!==""));
+ try{ await TSP.post("cameras/",f); TSP.closeModal(); load(); }catch(err){TSP.toast(err.message,"err");} }
+async function tog(id,v){ await TSP.patch(`cameras/${id}/`,{is_active:v}); load(); }
+async function del(id){ if(confirm("Delete camera?")){ await TSP.api(`cameras/${id}/`,{method:"DELETE"}); load(); } }
+load(); setInterval(load,8000);
+</script>{% endblock %}

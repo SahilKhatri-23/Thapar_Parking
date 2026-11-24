@@ -1,0 +1,12 @@
+{% extends "web/base.html" %}{% block title %}Audit Log{% endblock %}
+{% block body %}
+<div class="top"><div><h1>Audit log</h1><div class="sub">Append-only record of approvals, revocations, guard decisions, flags, alerts and contact reveals.</div></div></div>
+<div class="card"><div class="hd"><input id="q" placeholder="Search" style="max-width:260px"><select id="a" style="width:auto"><option value="">All actions</option><option>vehicle</option><option>booking</option><option>gate</option><option>pass</option><option>flag</option><option>contact</option><option>lot</option><option>user</option><option>camera</option></select></div>
+<table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Summary</th></tr></thead><tbody id="rows"></tbody></table></div>
+{% endblock %}
+{% block js %}<script>
+const $=id=>document.getElementById(id); let T;
+async function load(){ const r=await TSP.api(`audit/?q=${encodeURIComponent($("q").value)}&action=${$("a").value}`);
+ $("rows").innerHTML=r.map(x=>`<tr><td class="small muted">${TSP.fmtDT(x.created_at)}</td><td class="small"><b>${TSP.esc(x.actor_name)}</b></td><td><span class="code">${TSP.esc(x.action)}</span></td><td class="small">${TSP.esc(x.summary)}</td></tr>`).join("")||`<tr><td colspan=4 class="empty">Nothing logged yet</td></tr>`; }
+$("q").oninput=()=>{clearTimeout(T);T=setTimeout(load,250);}; $("a").onchange=load; load();
+</script>{% endblock %}

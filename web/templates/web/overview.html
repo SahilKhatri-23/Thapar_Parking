@@ -1,0 +1,53 @@
+{% extends "web/base.html" %}{% block title %}Overview{% endblock %}
+{% block body %}
+<div class="top"><div><h1>Good <span id="greet">day</span>, {{ request.user.display_name|cut:" (Main Gate)"|cut:" (Patrol)" }}</h1>
+<div class="sub" id="today"></div></div><div class="spacer"></div>
+<a class="btn pri" href="/portal/gate/"><svg><use href="#i-gate"/></svg>Open gate dashboard</a></div>
+
+<div class="grid g6" id="kpis"></div>
+
+<div class="grid" style="grid-template-columns:1.6fr 1fr;margin-top:16px">
+ <div class="card"><div class="hd"><h3>Parking availability</h3><span class="muted small" id="slotsum"></span><div class="spacer"></div><a href="/portal/occupancy/" class="btn sm">Manage</a></div>
+  <div class="bd" id="lots"></div></div>
+ <div class="grid" style="align-content:start">
+  <div class="card"><div class="hd"><h3>Needs attention</h3></div><div class="bd" id="attention"></div></div>
+  <div class="card"><div class="hd"><h3>Connect the mobile app</h3></div><div class="bd row" style="align-items:flex-start;gap:16px">
+   <div style="width:132px;flex-shrink:0;padding:6px;border:1px solid var(--line);border-radius:12px">{{ server_qr }}</div>
+   <div><div class="muted small">In the app, tap <b>Server settings → Scan QR</b>, or type:</div>
+   <div class="code" style="display:inline-block;margin:8px 0;font-size:14px">{{ server_url }}</div>
+   <div class="muted small">Phone and this computer must be on the same Wi-Fi. Server must run with <span class="code">0.0.0.0:8000</span>.</div></div></div></div>
+ </div>
+</div>
+
+<div class="card" style="margin-top:16px"><div class="hd"><h3>Latest gate activity</h3><div class="spacer"></div><a href="/portal/gate/" class="btn sm">Live view</a></div>
+ <table><thead><tr><th>Time</th><th>Plate</th><th>Gate</th><th>Decision</th><th>Reason</th><th>Source</th></tr></thead><tbody id="events"></tbody></table></div>
+{% endblock %}
+{% block js %}<script>
+const h=new Date().getHours();document.getElementById("greet").textContent=h<12?"morning":h<17?"afternoon":"evening";
+document.getElementById("today").textContent=new Date().toLocaleDateString([], {weekday:"long",day:"numeric",month:"long",year:"numeric"});
+async function load(){
+  const s=await TSP.api("dashboard/stats/");
+  const d=s.decisions_today;
+  const k=[["Entries today",s.entries_today,`${s.exits_today} exits`],["Authorized",d.authorized,"auto + reviewed"],
+   ["Needs review",s.pending_review,"unreviewed, last 12h"],["Unauthorized",d.unauthorized,`${d.expired} expired`],
+   ["Free slots",s.slots_available,`of ${s.slots_total} across lots`],["Live passes",s.passes_live,`${s.bookings_pending} awaiting approval`]];
+  document.getElementById("kpis").innerHTML=k.map(([l,v,x])=>`<div class="card kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${x}</div></div>`).join("");
+  document.getElementById("slotsum").textContent=`${s.slots_available} free / ${s.slots_total}`;
+  document.getElementById("lots").innerHTML=s.lots.map(l=>{const pct=l.occupancy_pct;const c=pct>90?"var(--bad)":pct>70?"#E59A1A":"var(--ok)";
+    return `<div style="margin-bottom:14px"><div class="row"><b>${TSP.esc(l.name)}</b><span class="muted small">${l.source_label}${l.occupancy_updated_at?" · "+TSP.ago(l.occupancy_updated_at):""}</span><div class="spacer"></div>
+    <b style="color:${c}">${l.available}</b><span class="muted small">&nbsp;free / ${l.total_slots}</span></div>
+    <div class="bar" style="margin-top:7px"><div style="width:${pct}%;background:${c}"></div></div></div>`}).join("");
+  const att=[];
+  if(s.pending_review) att.push(["needs_review",`${s.pending_review} gate reads need review`,"/portal/gate/"]);
+  if(s.bookings_pending) att.push(["pending",`${s.bookings_pending} pass requests awaiting approval`,"/portal/passes/"]);
+  if(s.vehicles_pending) att.push(["pending",`${s.vehicles_pending} vehicle registrations pending`,"/portal/vehicles/"]);
+  if(s.flags_open) att.push(["open",`${s.flags_open} open flags`,"/portal/flags/"]);
+  if(s.faculty_pending) att.push(["pending",`${s.faculty_pending} faculty accounts to verify`,"/portal/users/"]);
+  att.push(["muted",`Cameras online: ${s.cameras_online}/${s.cameras_total}`,"/portal/cameras/"]);
+  document.getElementById("attention").innerHTML=att.map(([b,t,u])=>`<a href="${u}" class="row" style="padding:8px 0;color:inherit;border-bottom:1px solid #F3EEEB">${TSP.badge(b," ")}<span>${t}</span><div class="spacer"></div><span class="muted">›</span></a>`).join("");
+  const ev=await TSP.api("gate/events/?limit=8");
+  document.getElementById("events").innerHTML=ev.map(e=>`<tr><td class="muted">${TSP.fmtTime(e.created_at)}</td><td>${TSP.plate(e.plate)}</td><td>${TSP.esc(e.gate)} <span class="muted small">${e.direction}</span></td>
+   <td>${TSP.badge(e.effective)}</td><td class="small">${TSP.esc(e.reason)}</td><td class="muted small">${e.source_label}</td></tr>`).join("")||`<tr><td colspan=6 class="empty">No gate events yet</td></tr>`;
+}
+load(); setInterval(load,10000);
+</script>{% endblock %}

@@ -1,0 +1,52 @@
+{% extends "web/base.html" %}{% block title %}Flags & Alerts{% endblock %}
+{% block body %}
+<div class="top"><div><h1>Flags &amp; owner alerts</h1><div class="sub">Flag a vehicle (wrong / no-parking zone, blocking, identity check). The owner is alerted in the app and by email. Alerts are rate-limited and logged.</div></div></div>
+<div class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,2.2fr)">
+ <div class="card" style="align-self:start"><div class="hd"><h3>New flag</h3></div><form class="bd" onsubmit="create(event)" id="ff">
+  <div class="field"><label>Plate *</label><div class="row"><input name="plate" id="fplate" required style="text-transform:uppercase" placeholder="PB11AB1234">
+   <label class="btn" style="margin:0;color:var(--ink)" title="Read plate from a photo">📷<input type="file" accept="image/*" id="fimg" style="display:none"></label></div>
+   <div id="fwho" class="small" style="margin-top:6px"></div></div>
+  <div class="field"><label>Reason</label><select name="reason">
+   <option value="no_parking">Parked in no-parking / flagged zone</option><option value="blocking">Blocking access / another vehicle</option>
+   <option value="wrong_slot">Parked in wrong / reserved slot</option><option value="identity">Identity confirmation required</option>
+   <option value="unauthorized">Unauthorized vehicle on campus</option><option value="lights">Lights on / window open</option><option value="other">Other</option></select></div>
+  <div class="field"><label>Parking lot</label><select name="lot" id="flot"><option value="">— other location —</option></select></div>
+  <div class="field"><label>Location detail</label><input name="location" placeholder="e.g. in front of G block gate"></div>
+  <div class="field"><label>Note to owner</label><input name="note" placeholder="Please move within 10 minutes"></div>
+  <label class="row" style="font-weight:500;color:var(--ink);margin-bottom:14px"><input type="checkbox" name="notify" checked style="width:auto"> Alert owner now (app + email)</label>
+  <button class="btn bad" style="width:100%">Flag vehicle</button></form></div>
+ <div class="card"><div class="hd"><div class="tabs" id="tabs"><button data-o="1" class="on">Open</button><button data-o="">All</button></div></div>
+  <table><thead><tr><th>Vehicle</th><th>Reason / place</th><th>Status</th><th>Alerts</th><th>Owner reply</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+</div>
+{% endblock %}
+{% block js %}<script>
+const $=id=>document.getElementById(id); let OPEN="1", fileBlob=null, T;
+document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>{document.querySelectorAll("#tabs button").forEach(x=>x.classList.remove("on"));b.classList.add("on");OPEN=b.dataset.o;load();});
+TSP.api("lots/").then(l=>$("flot").insertAdjacentHTML("beforeend",l.map(x=>`<option value="${x.id}">${TSP.esc(x.name)}</option>`).join("")));
+async function who(){ const p=$("fplate").value; if(p.length<6){$("fwho").innerHTML="";return;}
+  const r=await TSP.api("vehicles/lookup/?plate="+encodeURIComponent(p)); const v=r.vehicle;
+  $("fwho").innerHTML=v&&r.match==="exact"?`Owner: <b>${TSP.esc(v.owner_name)}</b> · ${v.has_app_account?"<span style='color:var(--ok)'>can be alerted in app</span>":"<span style='color:var(--warn)'>no app account. Call "+TSP.esc(v.phone)+"</span>"}`
+    :`<span style="color:var(--bad)">Not in registry${v?" (near match "+v.pretty+")":""}. Flag will be logged; no owner to alert.</span>`; }
+$("fplate").oninput=()=>{clearTimeout(T);T=setTimeout(who,300);};
+$("fimg").onchange=async e=>{ fileBlob=e.target.files[0]; if(!fileBlob) return; $("fwho").textContent="Reading plate…";
+  try{ const r=await TSP.upload("vision/plate/",fileBlob); if(r.reads.length){ $("fplate").value=r.reads[0].pretty; who(); } else $("fwho").textContent="No plate found; type it."; }catch(err){TSP.toast(err.message,"err");} };
+async function create(e){ e.preventDefault(); const fd=new FormData(e.target); fd.set("notify",e.target.notify.checked?"true":"false"); if(fileBlob) fd.append("image",fileBlob,"flag.jpg");
+  try{ const r=await TSP.api("flags/",{method:"POST",form:fd}); TSP.toast((r.existing?"Existing open flag. ":"Flag created. ")+(r.alert?r.alert.message:""),r.alert&&r.alert.sent?"ok":""); e.target.reset(); fileBlob=null; $("fwho").innerHTML=""; load(); }
+  catch(err){TSP.toast(err.message,"err");} }
+async function load(){
+  const f=await TSP.api("flags/?"+(OPEN?"open=1":""));
+  $("rows").innerHTML=f.map(x=>`<tr><td>${TSP.plate(x.plate)}<div class="small muted">${TSP.esc(x.owner_name||"unknown owner")}</div></td>
+   <td class="small"><b>${TSP.esc(x.reason_label)}</b><div class="muted">${TSP.esc(x.lot_name||x.location||"")} · ${TSP.ago(x.created_at)} by ${TSP.esc(x.created_by_name||"")}</div>${x.note?`<div>“${TSP.esc(x.note)}”</div>`:""}</td>
+   <td>${TSP.badge(x.status,x.status_label)}</td><td class="small">${x.notified_count}× ${x.last_notified_at?"<div class='muted'>"+TSP.ago(x.last_notified_at)+"</div>":""}</td>
+   <td class="small">${TSP.esc(x.owner_reply||"—")}</td>
+   <td class="right"><div class="row" style="justify-content:flex-end;gap:6px">${["open","notified","acknowledged"].includes(x.status)?`
+    ${x.has_app_owner?`<button class="btn sm" onclick="act(${x.id},'notify')">Re-alert</button>`:""}
+    <a class="btn sm" href="/portal/vehicles/?plate=${x.plate}">Call</a>
+    <button class="btn sm ok" onclick="act(${x.id},'resolve')">Resolve</button><button class="btn sm ghost" onclick="act(${x.id},'cancel')">Cancel</button>`:""}</div></td></tr>`).join("")
+   ||`<tr><td colspan=6 class="empty">No ${OPEN?"open ":""}flags</td></tr>`;
+}
+async function act(id,action){ let note=""; if(action!=="notify"){ note=prompt("Resolution note:", action==="resolve"?"Vehicle moved":""); if(note===null) return; }
+  try{ const r=await TSP.post(`flags/${id}/action/`,{action,note}); TSP.toast(r.message||r.detail||"Done","ok"); load(); }catch(e){TSP.toast(e.message,"err");} }
+const qp=new URLSearchParams(location.search).get("plate"); if(qp){ $("fplate").value=TSP.prettyPlate(qp); who(); }
+load(); setInterval(load,10000);
+</script>{% endblock %}

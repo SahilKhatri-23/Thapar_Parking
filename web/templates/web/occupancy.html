@@ -1,0 +1,114 @@
+{% extends "web/base.html" %}{% block title %}Parking & Slots{% endblock %}
+{% block body %}
+<div class="top"><div><h1>Parking &amp; slots</h1><div class="sub">Set the number of slots per lot. A camera photo is analysed by RF-DETR to count parked vehicles → available = slots − vehicles − active reservations.</div></div></div>
+<div class="grid g3" id="lots"></div>
+
+<div class="card" style="margin-top:18px" id="detail" hidden>
+ <div class="hd"><h3 id="dName"></h3><span class="muted small" id="dMeta"></span><div class="spacer"></div>
+  <div class="tabs" id="dtabs"><button data-t="detect" class="on">Detection</button><button data-t="zone">Detection zone</button><button data-t="slots">Slots</button>{% if request.user.is_admin %}<button data-t="settings">Settings</button>{% endif %}</div></div>
+ <div class="bd">
+  <div data-p="detect">
+   <div class="grid" style="grid-template-columns:minmax(0,3fr) minmax(0,2fr)">
+    <div><div class="video-box" style="aspect-ratio:16/9"><img id="annot" style="display:none"><video id="video" playsinline muted style="display:none"></video>
+      <div id="noimg" style="position:absolute;inset:0;display:grid;place-items:center;color:#bbb">No camera image yet. Upload a lot photo or use a camera.</div></div></div>
+    <div>
+     <div class="row" style="align-items:flex-end;gap:18px;margin-bottom:14px">
+      <div><div class="muted small b">AVAILABLE</div><div class="avail" id="dAvail">–</div></div>
+      <div><div class="muted small b">VEHICLES</div><div class="avail" style="font-size:24px" id="dOcc">–</div></div>
+      <div><div class="muted small b">RESERVED</div><div class="avail" style="font-size:24px" id="dRes">–</div></div>
+      <div><div class="muted small b">2-WHEELERS</div><div class="avail" style="font-size:24px" id="d2w">–</div></div></div>
+     <div class="bar" style="margin-bottom:16px"><div id="dBar"></div></div>
+     <div class="row" style="flex-wrap:wrap">
+      <label class="btn pri" style="margin:0;color:#fff">Upload lot photo<input type="file" accept="image/*" id="file" style="display:none"></label>
+      <button class="btn" onclick="camToggle()" id="camBtn">Use webcam</button>
+      <button class="btn" onclick="camDetect()" id="camSnap" disabled>Snap &amp; detect</button>
+      <button class="btn" onclick="autoToggle()" id="autoBtn" disabled>Auto every 30s</button></div>
+     <div class="muted small" style="margin-top:10px" id="detInfo"></div>
+     <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--line)">
+      <label>Manual count (guard update / camera down)</label>
+      <form class="row" onsubmit="manual(event)"><input type="number" min="0" id="manOcc" placeholder="vehicles parked"><input type="number" min="0" id="man2w" placeholder="2-wheelers"><button class="btn">Update</button></form></div>
+    </div></div>
+  </div>
+  <div data-p="zone" hidden>
+   <p class="muted small" style="margin-top:0">Click on the last snapshot to outline the parking area (≥3 points). Vehicles outside the zone (roads, other lots) are ignored. Save, then run detection again.</p>
+   <div class="zone-wrap" id="zwrap"><img id="zimg"><canvas id="zcan"></canvas></div>
+   <div class="row" style="margin-top:12px"><button class="btn" onclick="zpts=[];drawZ()">Clear</button><button class="btn" onclick="zpts.pop();drawZ()">Undo point</button><div class="spacer"></div>
+   <button class="btn" onclick="saveZone(true)">Remove zone (use full image)</button><button class="btn pri" onclick="saveZone()">Save zone</button></div>
+  </div>
+  <div data-p="slots" hidden><div class="row" style="margin-bottom:12px"><span class="muted small">Bookings for</span><input type="datetime-local" id="sStart" style="width:auto"><span class="muted small">to</span><input type="datetime-local" id="sEnd" style="width:auto"><button class="btn sm" onclick="loadSlots()">Show</button>
+   <div class="spacer"></div><span class="slot" style="padding:4px 10px">free</span><span class="slot booked" style="padding:4px 10px">booked</span><span class="slot visitor" style="padding:4px 10px">visitor bay</span></div>
+   <div class="slotgrid" id="slotgrid"></div></div>
+  <div data-p="settings" hidden><form onsubmit="saveSettings(event)" class="grid g3" id="setForm"></form></div>
+ </div>
+</div>
+{% endblock %}
+{% block js %}<script>
+const $=id=>document.getElementById(id); let LOTS=[], CUR=null, zpts=[], camOn=false, autoT=null;
+const cam=TSP.Cam($("video"));
+async function loadLots(keep){
+  LOTS=await TSP.api("lots/");
+  $("lots").innerHTML=LOTS.map(l=>{const pct=l.occupancy_pct, c=pct>90?"var(--bad)":pct>70?"#E59A1A":"var(--ok)";
+   return `<div class="card lot-card ${CUR&&CUR.id===l.id?"on":""}" onclick="pick(${l.id})">
+    ${l.annotated_url?`<img src="${l.annotated_url}?t=${Date.parse(l.occupancy_updated_at)}">`:`<div style="height:130px;background:linear-gradient(135deg,#F1E7E3,#E9DDD8);border-radius:14px 14px 0 0;display:grid;place-items:center;color:#9a8b8e" class="small">No camera snapshot</div>`}
+    <div class="bd"><div class="row"><b>${TSP.esc(l.name)}</b><div class="spacer"></div>${l.occupancy_source==="none"?'<span class="badge b-muted">no data</span>':l.stale?'<span class="badge b-expired">stale</span>':'<span class="badge b-active">live</span>'}</div>
+    <div class="row" style="align-items:flex-end;margin-top:8px"><div class="avail" style="color:${c}">${l.available}</div><div class="muted small" style="margin-bottom:4px">free of ${l.total_slots}</div><div class="spacer"></div>
+    <div class="muted small right">${l.occupied} parked · ${l.reserved} reserved<br>${l.source_label} · ${TSP.ago(l.occupancy_updated_at)}</div></div>
+    <div class="bar" style="margin-top:10px"><div style="width:${pct}%;background:${c}"></div></div></div></div>`}).join("");
+  if(CUR) { CUR=LOTS.find(l=>l.id===CUR.id); showDetail(); }
+}
+function pick(id){ CUR=LOTS.find(l=>l.id===id); $("detail").hidden=false; loadLots(); showDetail(); $("detail").scrollIntoView({behavior:"smooth"}); }
+function showDetail(){
+  const l=CUR; $("dName").textContent=l.name; $("dMeta").textContent=`${l.total_slots} slots · ${l.visitor_slots} visitor bays · ${l.roles.join(", ")}`;
+  $("dAvail").textContent=l.available; $("dOcc").textContent=l.occupied; $("dRes").textContent=l.reserved; $("d2w").textContent=l.occupied_2w;
+  $("dBar").style.width=l.occupancy_pct+"%"; $("dBar").style.background=l.occupancy_pct>90?"var(--bad)":l.occupancy_pct>70?"#E59A1A":"var(--ok)";
+  if(!camOn){ if(l.annotated_url){ $("annot").src=l.annotated_url+"?t="+Date.parse(l.occupancy_updated_at); $("annot").style.display="block"; $("noimg").style.display="none"; } else { $("annot").style.display="none"; $("noimg").style.display="grid"; } }
+  zpts=(l.detection_zone||[]).map(p=>[...p]); if(l.snapshot_url){ $("zimg").src=l.snapshot_url+"?t="+Date.parse(l.occupancy_updated_at); }
+  $("zimg").onload=drawZ;
+  if(ME.admin) $("setForm").innerHTML=[["name","Name","text"],["total_slots","Total car slots","number"],["visitor_slots","Visitor / vendor bays (last N slots)","number"],
+    ["two_wheeler_capacity","Two-wheeler capacity","number"],["latitude","Latitude","number"],["longitude","Longitude","number"],["allowed_roles","Allowed roles (comma)","text"],["description","Description","text"]]
+    .map(([k,lab,t])=>`<div class="field"><label>${lab}</label><input name="${k}" type="${t}" step="any" value="${TSP.esc(l[k])}"></div>`).join("")+
+    `<div class="field"><label>Faculty pre-booking</label><select name="bookable"><option value="true" ${l.bookable?"selected":""}>Enabled</option><option value="false" ${!l.bookable?"selected":""}>Disabled</option></select></div>
+     <div class="field"><label>Status</label><select name="is_active"><option value="true" ${l.is_active?"selected":""}>Active</option><option value="false" ${!l.is_active?"selected":""}>Closed</option></select></div>
+     <div class="field" style="align-self:end"><button class="btn pri">Save settings</button></div>`;
+  const now=new Date(); now.setMinutes(0,0,0); const iso=d=>new Date(d-d.getTimezoneOffset()*6e4).toISOString().slice(0,16);
+  if(!$("sStart").value){ $("sStart").value=iso(now); $("sEnd").value=iso(new Date(+now+2*36e5)); }
+}
+document.querySelectorAll("#dtabs button").forEach(b=>b.onclick=()=>{document.querySelectorAll("#dtabs button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  document.querySelectorAll("[data-p]").forEach(p=>p.hidden=p.dataset.p!==b.dataset.t); if(b.dataset.t==="zone") drawZ(); if(b.dataset.t==="slots") loadSlots();});
+async function detect(blob){
+  $("detInfo").textContent="Detecting vehicles…";
+  try{ const r=await TSP.upload(`lots/${CUR.id}/detect/`,blob); const x=r.result;
+    $("detInfo").innerHTML=`Detected <b>${x.four_wheelers}</b> vehicles and <b>${x.two_wheelers}</b> two-wheelers · model ${x.model}`;
+    if(!camOn){ CUR=r.lot; } TSP.toast(`${r.lot.name}: ${r.lot.available} slots available`,"ok"); await loadLots(); }
+  catch(e){ $("detInfo").textContent=""; TSP.toast(e.message,"err"); }
+}
+$("file").onchange=e=>{ if(e.target.files[0]) detect(e.target.files[0]); e.target.value=""; };
+async function camToggle(){
+  if(camOn){ cam.stop(); camOn=false; $("video").style.display="none"; $("camBtn").textContent="Use webcam"; $("camSnap").disabled=$("autoBtn").disabled=true; if(autoT){clearInterval(autoT);autoT=null;} showDetail(); return; }
+  try{ await cam.start(); camOn=true; $("video").style.display="block"; $("annot").style.display="none"; $("noimg").style.display="none"; $("camBtn").textContent="Stop webcam"; $("camSnap").disabled=$("autoBtn").disabled=false; }
+  catch(e){ TSP.toast("Camera error: "+e.message,"err"); }
+}
+async function camDetect(){ detect(await cam.snap()); }
+function autoToggle(){ if(autoT){clearInterval(autoT);autoT=null;$("autoBtn").textContent="Auto every 30s";return;} camDetect(); autoT=setInterval(camDetect,30000); $("autoBtn").textContent="Auto: on"; }
+async function manual(e){ e.preventDefault(); try{ CUR=await TSP.post(`lots/${CUR.id}/manual/`,{occupied:$("manOcc").value||0,two_wheelers:$("man2w").value||null}); TSP.toast("Occupancy updated","ok"); loadLots(); }catch(err){TSP.toast(err.message,"err");} }
+function drawZ(){
+  const img=$("zimg"), c=$("zcan"); if(!img.naturalWidth) return; c.width=img.clientWidth; c.height=img.clientHeight;
+  const g=c.getContext("2d"); g.clearRect(0,0,c.width,c.height); if(!zpts.length) return;
+  g.fillStyle="rgba(0,180,255,.18)"; g.strokeStyle="#00B4FF"; g.lineWidth=3; g.beginPath();
+  zpts.forEach(([x,y],i)=>i?g.lineTo(x*c.width,y*c.height):g.moveTo(x*c.width,y*c.height)); g.closePath(); g.fill(); g.stroke();
+  zpts.forEach(([x,y])=>{g.fillStyle="#fff";g.beginPath();g.arc(x*c.width,y*c.height,5,0,7);g.fill();g.stroke();});
+}
+$("zcan").onclick=e=>{ const r=e.target.getBoundingClientRect(); zpts.push([+((e.clientX-r.left)/r.width).toFixed(4),+((e.clientY-r.top)/r.height).toFixed(4)]); drawZ(); };
+window.addEventListener("resize",drawZ);
+async function saveZone(remove){ if(!remove&&zpts.length<3) return TSP.toast("Add at least 3 points","err");
+  try{ CUR=await TSP.patch(`lots/${CUR.id}/`,{detection_zone:remove?null:zpts}); if(remove) zpts=[]; drawZ(); TSP.toast(remove?"Zone removed":"Zone saved. Run detection again to apply.","ok"); }catch(e){TSP.toast(e.message,"err");} }
+async function loadSlots(){
+  const s=new Date($("sStart").value).toISOString(), e=new Date($("sEnd").value).toISOString();
+  const r=await TSP.api(`lots/${CUR.id}/slots/?start=${encodeURIComponent(s)}&end=${encodeURIComponent(e)}&kind=all`);
+  $("slotgrid").innerHTML=r.slots.map(x=>`<div class="slot ${x.state==="booked"?"booked":""} ${x.kind==="visitor"?"visitor":""}" title="${x.kind}">${x.label}</div>`).join("");
+}
+async function saveSettings(e){ e.preventDefault(); const f=Object.fromEntries(new FormData(e.target)); f.bookable=f.bookable==="true"; f.is_active=f.is_active==="true";
+  try{ CUR=await TSP.patch(`lots/${CUR.id}/`,f); TSP.toast("Saved","ok"); loadLots(); }catch(err){TSP.toast(err.message,"err");} }
+loadLots().then(()=>{ const q=new URLSearchParams(location.search).get("lot"); if(q) pick(+q); });
+setInterval(()=>{ if(!camOn) loadLots(); },15000);
+</script>{% endblock %}

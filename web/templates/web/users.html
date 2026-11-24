@@ -1,0 +1,27 @@
+{% extends "web/base.html" %}{% block title %}Users{% endblock %}
+{% block body %}
+<div class="top"><div><h1>Users</h1><div class="sub">Verify faculty, assign roles, create guard accounts, deactivate users.</div></div><div class="spacer"></div><button class="btn pri" onclick="add()">+ Create staff account</button></div>
+<div class="card"><div class="hd" style="flex-wrap:wrap"><input id="q" placeholder="Search name, email, phone" style="max-width:260px">
+ <div class="tabs" id="tabs"><button data-r="" class="on">All</button><button data-r="pending">Faculty to verify</button><button data-r="faculty">Faculty</button><button data-r="student">Students</button><button data-r="guard">Guards</button><button data-r="admin">Admins</button><button data-r="vendor">Vendors</button><button data-r="visitor">Visitors</button></div></div>
+<table><thead><tr><th>Name</th><th>Email / phone</th><th>Role</th><th>Details</th><th>Verified</th><th>Joined</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+{% endblock %}
+{% block js %}<script>
+const $=id=>document.getElementById(id); let R="", T;
+document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>{document.querySelectorAll("#tabs button").forEach(x=>x.classList.remove("on"));b.classList.add("on");R=b.dataset.r;load();});
+$("q").oninput=()=>{clearTimeout(T);T=setTimeout(load,250);};
+const ROLES=["admin","guard","faculty","student","vendor","visitor"];
+async function load(){ const qs=R==="pending"?"pending=1":"role="+R; const u=await TSP.api(`users/?${qs}&q=${encodeURIComponent($("q").value)}`);
+ $("rows").innerHTML=u.map(x=>`<tr style="${x.is_active?"":"opacity:.5"}"><td><b>${TSP.esc(x.full_name||"—")}</b></td><td class="small">${TSP.esc(x.email)}<div class="muted">${TSP.esc(x.phone)}</div></td>
+  <td><select onchange="upd(${x.id},{role:this.value})" style="width:auto;padding:5px 8px">${ROLES.map(r=>`<option ${r===x.role?"selected":""}>${r}</option>`).join("")}</select></td>
+  <td class="small">${TSP.esc([x.department,x.roll_or_emp_no,x.organisation,x.gate].filter(Boolean).join(" · "))||"—"}</td>
+  <td>${x.is_email_verified?TSP.badge("active","email ✓"):TSP.badge("pending","email ✗")} ${x.role==="faculty"?(x.role_verified?TSP.badge("active","faculty ✓"):`<button class="btn sm ok" onclick="upd(${x.id},{role_verified:true})">Verify faculty</button>`):""}</td>
+  <td class="small muted">${TSP.fmtDT(x.date_joined)}</td>
+  <td class="right">${x.id===ME.id?"":`<button class="btn sm ghost" onclick="upd(${x.id},{is_active:${!x.is_active}})">${x.is_active?"Deactivate":"Activate"}</button>`}</td></tr>`).join("")||`<tr><td colspan=7 class="empty">No users</td></tr>`; }
+async function upd(id,body){ try{ await TSP.patch(`users/${id}/`,body); TSP.toast("Updated","ok"); load(); }catch(e){TSP.toast(e.message,"err");} }
+function add(){ TSP.modal(`<div class="hd"><h3>Create staff account</h3><div class="spacer"></div><button class="btn ghost" onclick="TSP.closeModal()">✕</button></div><form class="bd" onsubmit="save(event)"><div class="grid g2">
+ <div class="field"><label>Email</label><input name="email" type="email" required placeholder="name@thapar.edu"></div><div class="field"><label>Full name</label><input name="full_name"></div>
+ <div class="field"><label>Role</label><select name="role"><option value="guard">Guard</option><option value="admin">Admin</option></select></div><div class="field"><label>Gate</label><input name="gate" value="Main Gate"></div>
+ <div class="field"><label>Phone</label><input name="phone"></div><div class="field"><label>Temporary password</label><input name="password" value="Thapar@123"></div></div><button class="btn pri">Create</button></form>`); }
+async function save(e){ e.preventDefault(); try{ await TSP.post("users/",Object.fromEntries(new FormData(e.target))); TSP.closeModal(); load(); }catch(err){TSP.toast(err.message,"err");} }
+load();
+</script>{% endblock %}

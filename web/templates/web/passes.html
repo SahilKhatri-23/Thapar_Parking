@@ -1,0 +1,36 @@
+{% extends "web/base.html" %}{% block title %}Passes & Bookings{% endblock %}
+{% block body %}
+<div class="top"><div><h1>Passes &amp; bookings</h1><div class="sub">Visitor/vendor passes need approval. Approved holders get a green QR pass in the app; it is verified on the server at the gate.</div></div></div>
+<div class="card">
+ <div class="hd" style="flex-wrap:wrap"><div class="tabs" id="tabs">
+  <button data-s="pending" class="on">Awaiting approval <span id="pc"></span></button><button data-s="approved,checked_in">Approved / inside</button>
+  <button data-s="">All</button><button data-s="rejected,cancelled,expired,no_show,completed">Closed</button></div>
+  <div class="spacer"></div><input id="q" placeholder="Search code, plate, name" style="max-width:240px"></div>
+ <table><thead><tr><th>Pass</th><th>Holder</th><th>Vehicle</th><th>Lot / slot</th><th>Window</th><th>Purpose / host</th><th>Status</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+</div>
+{% endblock %}
+{% block js %}<script>
+const $=id=>document.getElementById(id); let ST="pending", T;
+document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>{document.querySelectorAll("#tabs button").forEach(x=>x.classList.remove("on"));b.classList.add("on");ST=b.dataset.s;load();});
+$("q").oninput=()=>{clearTimeout(T);T=setTimeout(load,250);};
+async function load(){
+  const [rows,pend]=await Promise.all([TSP.api(`bookings/?all=1&status=${ST}&q=${encodeURIComponent($("q").value)}`),TSP.api("bookings/?all=1&status=pending")]);
+  $("pc").textContent=pend.length?`(${pend.length})`:"";
+  $("rows").innerHTML=rows.map(b=>`<tr><td><b>${b.code}</b><div class="small muted">${b.kind_label}</div></td>
+   <td><b>${TSP.esc(b.holder)}</b><div class="small muted">${TSP.esc(b.organisation||b.holder_email)}${b.holder_phone?" · "+TSP.esc(b.holder_phone):""}</div></td>
+   <td>${TSP.plate(b.vehicle_plate)}<div class="small muted">${TSP.esc(b.vehicle_desc)}</div></td>
+   <td>${TSP.esc(b.lot_name)}<div class="small muted">${b.slot_label?"Slot "+b.slot_label:"auto"}</div></td>
+   <td class="small">${TSP.fmtDT(b.start)}<br>→ ${TSP.fmtDT(b.end)}</td>
+   <td class="small">${TSP.esc(b.purpose)}<div class="muted">${TSP.esc(b.host_name)}</div></td>
+   <td>${TSP.badge(b.status,b.status_label)}${b.reject_reason?`<div class="small muted">${TSP.esc(b.reject_reason)}</div>`:""}</td>
+   <td class="right"><div class="row" style="justify-content:flex-end;gap:6px">
+    ${b.status==="pending"&&ME.admin?`<button class="btn sm ok" onclick="act(${b.id},'approve')">Approve</button><button class="btn sm bad" onclick="act(${b.id},'reject')">Reject</button>`:""}
+    ${b.status==="checked_in"?`<button class="btn sm" onclick="act(${b.id},'checkout')">Check out</button>`:""}
+    ${["pending","approved"].includes(b.status)&&ME.admin?`<button class="btn sm ghost" onclick="act(${b.id},'cancel')">Cancel</button>`:""}</div></td></tr>`).join("")
+   ||`<tr><td colspan=8 class="empty">Nothing here.</td></tr>`;
+}
+async function act(id,action){ let reason="";
+  if(action==="reject"){ reason=prompt("Reason (sent to the requester):","Slot not available for that time"); if(reason===null) return; }
+  try{ await TSP.post(`bookings/${id}/action/`,{action,reason}); TSP.toast("Done","ok"); load(); }catch(e){TSP.toast(e.message,"err");} }
+load(); setInterval(load,15000);
+</script>{% endblock %}
