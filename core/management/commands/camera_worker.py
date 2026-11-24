@@ -36,34 +36,6 @@ class Command(BaseCommand):
         src = int(src) if str(src).isdigit() else src
         interval = o["interval"] or (2.0 if cam.kind == Camera.Kind.GATE else 30.0)
         self.stdout.write(self.style.SUCCESS(f"[{cam.name}] reading {src} every {interval}s. Ctrl+C to stop."))
-
-        # If source is an HTTP snapshot/capture endpoint (e.g. ESP32 /capture)
-        is_http = isinstance(src, str) and (src.startswith("http://") or src.startswith("https://"))
-        if is_http and ("capture" in src or "snapshot" in src or "jpg" in src or "jpeg" in src):
-            import urllib.request
-            while True:
-                try:
-                    cam.refresh_from_db()
-                    if not cam.is_active:
-                        time.sleep(interval)
-                        continue
-                    req = urllib.request.Request(src, headers={"User-Agent": "TSP-CameraWorker/1.0"})
-                    with urllib.request.urlopen(req, timeout=10) as resp:
-                        jpg_bytes = resp.read()
-                    if cam.kind == Camera.Kind.GATE:
-                        r = S.process_gate_image(jpg_bytes, gate=cam.gate or "Main Gate", direction=cam.direction,
-                                                 source=GateEvent.Source.CAMERA, camera=cam)
-                        ev = r.get("event")
-                        if ev:
-                            self.stdout.write(f"  {ev.plate or '?':12s} {ev.decision:13s} {ev.confidence:.0%}  {ev.reason}")
-                    else:
-                        r = S.process_lot_image(cam.lot, jpg_bytes, camera=cam)
-                        self.stdout.write(f"  {cam.lot.name}: {r['four_wheelers']} vehicles, {r['available']} available")
-                except Exception as e:
-                    self.stderr.write(f"  error: {e}")
-                time.sleep(interval)
-            return
-
         cap = None
         last = 0.0
         while True:
